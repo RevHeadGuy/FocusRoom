@@ -403,6 +403,363 @@ def render_metrics(report):
             )
 
 
+def _fmt_bytes(n):
+    """Human-readable byte count."""
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
+
+
+def render_telemetry(report):
+    """
+    Render the four-panel telemetry dashboard:
+      1. AI USAGE
+      2. AGENT EXECUTION
+      3. MCP
+      4. EXECUTION TRACE
+    """
+
+    # ----------------------------------------------------------------
+    # Pull data from report
+    # ----------------------------------------------------------------
+
+    usage               = report.get("token_usage", {})
+    by_op               = report.get("token_usage_by_operation", [])
+    avg_tok             = report.get("avg_tokens_per_execution", {})
+    agent_status        = report.get("agent_execution_status", {})
+    mcp_data            = report.get("mcp_tool_counts", {})
+    tool_counts         = mcp_data.get("tool_counts", [])
+    transport           = mcp_data.get("transport", report.get("mcp_transport", {}))
+    cur_transport       = report.get("current_execution_transport", {})
+    cur_token_usage     = report.get("current_execution_token_usage", {})
+    traces              = report.get("recent_executions", [])
+
+    # ----------------------------------------------------------------
+    # CSS additions for telemetry panels
+    # ----------------------------------------------------------------
+
+    st.html("""
+        <style>
+        .tel-panel {
+            background: linear-gradient(145deg, rgba(28,45,42,.92), rgba(16,27,27,.92));
+            border: 1px solid rgba(182,221,210,.14);
+            border-radius: 8px;
+            padding: 1.2rem 1.4rem 1.4rem;
+            margin-bottom: 1rem;
+            font-family: 'DM Mono', monospace;
+        }
+        .tel-header {
+            color: #a5e3c9;
+            font-size: .68rem;
+            letter-spacing: .14em;
+            text-transform: uppercase;
+            border-bottom: 1px solid rgba(182,221,210,.14);
+            padding-bottom: .55rem;
+            margin-bottom: .9rem;
+        }
+        .tel-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            color: #dbe8e4;
+            font-size: .82rem;
+            margin-bottom: .35rem;
+        }
+        .tel-key  { color: #8da39e; }
+        .tel-val  { color: #dbe8e4; font-weight: 600; }
+        .tel-tick { color: #a5e3c9; }
+        .tel-cross{ color: #ff8d76; }
+        .tel-trace-step {
+            color: #dbe8e4;
+            font-size: .82rem;
+            padding: .2rem 0 .2rem .6rem;
+            border-left: 2px solid rgba(165,227,201,.25);
+            margin-bottom: .15rem;
+        }
+        .tel-trace-arrow {
+            color: #8da39e;
+            font-size: .75rem;
+            padding-left: .7rem;
+            margin-bottom: .15rem;
+        }
+        </style>
+    """)
+
+    col_left, col_right = st.columns(2, gap="large")
+
+    # ================================================================
+    # LEFT COLUMN — AI USAGE + AGENT EXECUTION
+    # ================================================================
+
+    with col_left:
+
+        # ------------------------------------------------------------
+        # 1. AI USAGE  —  operation breakdown table
+        # ------------------------------------------------------------
+
+        # Column headers
+        ai_table_html = """
+            <div class="tel-row" style="border-bottom:1px solid rgba(182,221,210,.12);
+                 padding-bottom:.4rem; margin-bottom:.5rem;">
+                <span class="tel-key" style="flex:2;">Operation</span>
+                <span class="tel-key" style="flex:1;text-align:right;">Req</span>
+                <span class="tel-key" style="flex:1.4;text-align:right;">Prompt</span>
+                <span class="tel-key" style="flex:1.4;text-align:right;">Compl</span>
+                <span class="tel-key" style="flex:1.4;text-align:right;">Total</span>
+            </div>"""
+
+        if by_op:
+            for row in by_op:
+                op   = html.escape(row.get("operation", "unknown"))
+                req  = row.get("requests", 0)
+                pt   = f"{row.get('prompt_tokens', 0):,}"
+                ct   = f"{row.get('completion_tokens', 0):,}"
+                tt   = f"{row.get('total_tokens', 0):,}"
+                ai_table_html += f"""
+                    <div class="tel-row">
+                        <span class="tel-key" style="flex:2;">{op}</span>
+                        <span class="tel-val" style="flex:1;text-align:right;">{req}</span>
+                        <span class="tel-val" style="flex:1.4;text-align:right;">{pt}</span>
+                        <span class="tel-val" style="flex:1.4;text-align:right;">{ct}</span>
+                        <span class="tel-val" style="flex:1.4;text-align:right;">{tt}</span>
+                    </div>"""
+
+            # Totals row
+            ai_table_html += f"""
+                <div class="tel-row" style="border-top:1px solid rgba(182,221,210,.12);
+                     margin-top:.4rem; padding-top:.4rem;">
+                    <span class="tel-val" style="flex:2;">TOTAL</span>
+                    <span class="tel-val" style="flex:1;text-align:right;">{usage.get("requests",0)}</span>
+                    <span class="tel-val" style="flex:1.4;text-align:right;">{usage.get("prompt_tokens",0):,}</span>
+                    <span class="tel-val" style="flex:1.4;text-align:right;">{usage.get("completion_tokens",0):,}</span>
+                    <span class="tel-val" style="flex:1.4;text-align:right;">{usage.get("total_tokens",0):,}</span>
+                </div>"""
+
+            # Average per execution row
+            n_exec   = avg_tok.get("executions", 0)
+            avg_p    = avg_tok.get("avg_prompt", 0)
+            avg_c    = avg_tok.get("avg_completion", 0)
+            avg_t    = avg_tok.get("avg_total", 0)
+            avg_label = f"AVG / exec ({n_exec})" if n_exec else "AVG / exec"
+            ai_table_html += f"""
+                <div class="tel-row" style="margin-top:.25rem; opacity:.75;">
+                    <span class="tel-key" style="flex:2;">{html.escape(avg_label)}</span>
+                    <span class="tel-key" style="flex:1;text-align:right;">—</span>
+                    <span class="tel-key" style="flex:1.4;text-align:right;">{avg_p:,}</span>
+                    <span class="tel-key" style="flex:1.4;text-align:right;">{avg_c:,}</span>
+                    <span class="tel-key" style="flex:1.4;text-align:right;">{avg_t:,}</span>
+                </div>"""
+        else:
+            ai_table_html += """
+                <div class="tel-row">
+                    <span class="tel-key">No LLM calls recorded yet</span>
+                </div>"""
+
+        st.html(f"""
+            <div class="tel-panel">
+                <div class="tel-header">AI USAGE</div>
+                {ai_table_html}
+            </div>
+        """)
+
+        # ------------------------------------------------------------
+        # 2. AGENT EXECUTION
+        # ------------------------------------------------------------
+
+        all_agents = ["TASK_AGENT", "MEMORY_AGENT", "PLANNING_AGENT"]
+
+        # Also surface supervisor if it ran
+        if "supervisor" in agent_status:
+            all_agents = ["supervisor"] + all_agents
+
+        agent_rows_html = ""
+
+        for agent_name in all_agents:
+            ran  = agent_status.get(agent_name, False)
+            tick = '<span class="tel-tick">✓</span>' if ran else '<span class="tel-cross">✗</span>'
+            agent_rows_html += f"""
+                <div class="tel-row">
+                    <span class="tel-key">{html.escape(agent_name)}</span>
+                    <span>{tick}</span>
+                </div>"""
+
+        st.html(f"""
+            <div class="tel-panel">
+                <div class="tel-header">AGENT EXECUTION</div>
+                {agent_rows_html}
+            </div>
+        """)
+
+    # ================================================================
+    # RIGHT COLUMN — MCP + EXECUTION TRACE
+    # ================================================================
+
+    with col_right:
+
+        # ------------------------------------------------------------
+        # 3. MCP
+        # ------------------------------------------------------------
+
+        # -- Lifetime tool call counts --
+        tool_rows_html = ""
+
+        if tool_counts:
+            for entry in tool_counts:
+                tool_rows_html += f"""
+                    <div class="tel-row">
+                        <span class="tel-key">{html.escape(entry.get("tool", "unknown"))}</span>
+                        <span class="tel-val">{entry.get("calls", 0)}</span>
+                    </div>"""
+        else:
+            tool_rows_html = '<div class="tel-row"><span class="tel-key">No MCP calls recorded yet</span></div>'
+
+        # -- Lifetime transport totals --
+        # total_calls = authoritative count from execution_events
+        # requests    = rows actually written to mcp_transport (may lag)
+        req_bytes    = transport.get("request_bytes", 0)
+        resp_bytes   = transport.get("response_bytes", 0)
+        total_calls  = transport.get("total_calls", transport.get("requests", 0))
+
+        lifetime_html = f"""
+            <div class="tel-row" style="margin-top:.7rem; padding-top:.6rem;
+                 border-top:1px solid rgba(182,221,210,.12);">
+                <span class="tel-key">Transport Requests</span>
+                <span class="tel-val">{total_calls}</span>
+            </div>
+            <div class="tel-row">
+                <span class="tel-key">Request Bytes</span>
+                <span class="tel-val">{html.escape(_fmt_bytes(req_bytes))}</span>
+            </div>
+            <div class="tel-row">
+                <span class="tel-key">Response Bytes</span>
+                <span class="tel-val">{html.escape(_fmt_bytes(resp_bytes))}</span>
+            </div>"""
+
+        # -- Current execution transport --
+        cur_req   = cur_transport.get("requests", 0)
+        cur_rqb   = cur_transport.get("request_bytes", 0)
+        cur_rsb   = cur_transport.get("response_bytes", 0)
+
+        current_exec_html = f"""
+            <div class="tel-row" style="margin-top:.9rem; padding-top:.6rem;
+                 border-top:1px solid rgba(182,221,210,.18);">
+                <span style="color:#a5e3c9; font-size:.68rem;
+                      letter-spacing:.10em; text-transform:uppercase;">
+                    Current Execution
+                </span>
+            </div>
+            <div class="tel-row">
+                <span class="tel-key">MCP requests</span>
+                <span class="tel-val">{cur_req}</span>
+            </div>
+            <div class="tel-row">
+                <span class="tel-key">Request bytes</span>
+                <span class="tel-val">{html.escape(_fmt_bytes(cur_rqb))}</span>
+            </div>
+            <div class="tel-row">
+                <span class="tel-key">Response bytes</span>
+                <span class="tel-val">{html.escape(_fmt_bytes(cur_rsb))}</span>
+            </div>"""
+
+        st.html(f"""
+            <div class="tel-panel">
+                <div class="tel-header">MCP</div>
+                {tool_rows_html}
+                {lifetime_html}
+                {current_exec_html}
+            </div>
+        """)
+
+        # ------------------------------------------------------------
+        # 4. EXECUTION TRACE
+        # ------------------------------------------------------------
+
+        if not traces:
+            st.html("""
+                <div class="tel-panel">
+                    <div class="tel-header">EXECUTION TRACE</div>
+                    <div class="tel-row">
+                        <span class="tel-key">No executions recorded yet.</span>
+                    </div>
+                </div>
+            """)
+        else:
+            trace  = traces[0]
+            events = trace.get("events", [])
+
+            steps_html = ""
+
+            for i, event in enumerate(events):
+                etype = event.get("event_type", "")
+                name  = event.get("name", "")
+
+                # Format step label
+                if etype == "MCP":
+                    label = f"MCP:{html.escape(name)}"
+                elif etype in ("Agent", "Result"):
+                    label = html.escape(name)
+                else:
+                    label = f"{html.escape(etype)}:{html.escape(name)}"
+
+                steps_html += f'<div class="tel-trace-step">{label}</div>'
+
+                if i < len(events) - 1:
+                    steps_html += '<div class="tel-trace-arrow">↓</div>'
+
+            st.html(f"""
+                <div class="tel-panel">
+                    <div class="tel-header">EXECUTION TRACE</div>
+                    {steps_html}
+                </div>
+            """)
+
+
+def render_telemetry_detail(report):
+    """Collapsible raw detail: per-execution token breakdown + event log."""
+
+    with st.expander("Raw telemetry detail", expanded=False):
+
+        # ── Per-execution token usage ──────────────────────────────
+        cur_token = report.get("current_execution_token_usage", {})
+        cur_ops   = cur_token.get("by_operation", [])
+        cur_tot   = cur_token.get("totals", {})
+
+        if cur_ops:
+            st.caption("Token usage — current execution")
+            rows = [
+                {
+                    "operation":  r.get("operation", "unknown"),
+                    "requests":   r.get("requests", 0),
+                    "prompt":     r.get("prompt_tokens", 0),
+                    "completion": r.get("completion_tokens", 0),
+                    "total":      r.get("total_tokens", 0),
+                }
+                for r in cur_ops
+            ]
+            rows.append({
+                "operation":  "TOTAL",
+                "requests":   cur_tot.get("requests", 0),
+                "prompt":     cur_tot.get("prompt_tokens", 0),
+                "completion": cur_tot.get("completion_tokens", 0),
+                "total":      cur_tot.get("total_tokens", 0),
+            })
+            st.dataframe(rows, hide_index=True, use_container_width=True)
+
+        # ── Execution event log ────────────────────────────────────
+        traces = report.get("recent_executions", [])
+
+        if traces:
+            trace = traces[0]
+            st.caption(f"Execution ID: {trace['execution_id']}")
+
+            for i, event in enumerate(trace.get("events", []), start=1):
+                label = f"{i}. {event['event_type']} → {event['name']}"
+                with st.expander(label, expanded=False):
+                    st.json(event.get("details", {}))
+
+
 # MAIN
 
 def main():
@@ -512,11 +869,15 @@ def main():
 
         render_metrics(report)
 
-        st.html(
-            """
-            <div class="section-rule"></div>
-            """
-        )
+        st.html('<div class="section-rule"></div>')
+
+        st.subheader("System telemetry")
+
+        render_telemetry(report)
+
+        render_telemetry_detail(report)
+
+        st.html('<div class="section-rule"></div>')
 
         left, right = st.columns(
             [1.35, 1]
@@ -1048,11 +1409,17 @@ def main():
             "Ask the assistant"
         )
 
+        st.caption(
+            "Try: "
+            "\"Check my pending tasks, consider my work preferences, "
+            "and create my daily plan.\""
+        )
+
         prompt = st.text_area(
             "Request",
             placeholder=(
-                "Plan my day and prioritize "
-                "my learning"
+                "Check my pending tasks, consider my work "
+                "preferences, and create my daily plan."
             ),
             height=140
         )
@@ -1071,7 +1438,7 @@ def main():
             else:
 
                 with st.spinner(
-                    "Thinking through your request..."
+                    "Orchestrating agents..."
                 ):
 
                     try:
@@ -1080,13 +1447,30 @@ def main():
                             prompt.strip()
                         )
 
-                        st.markdown(
-                            "### Result"
-                        )
+                        # Reload report so telemetry reflects this run
+                        try:
+                            updated_report = agent.productivity_report()
+                        except Exception:
+                            updated_report = report
 
-                        st.write(
-                            result
-                        )
+                        # ── Result ──────────────────────────────────
+                        st.markdown("### Result")
+
+                        if isinstance(result, dict):
+                            plan_text = result.get("plan")
+                            if plan_text:
+                                st.markdown(plan_text)
+                            else:
+                                st.write(result)
+                        else:
+                            st.write(result)
+
+                        # ── Telemetry panel ──────────────────────────
+                        st.markdown("### Execution telemetry")
+
+                        render_telemetry(updated_report)
+
+                        render_telemetry_detail(updated_report)
 
                     except Exception as e:
 

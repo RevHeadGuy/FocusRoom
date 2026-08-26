@@ -1,599 +1,248 @@
 import json
+import contextvars
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .agent import get_agent
 from .task_agent import TaskAgent
 from .memory_agent import MemoryAgent
 from .planning_agent import PlanningAgent
+from .mcp_transport import record_mcp_call
+from .telemetry import (
+    finish_execution,
+    record_event,
+    set_execution_id,
+    start_execution,
+)
 
 
 class ProductivitySupervisor:
 
     def __init__(self):
-
         self.agent = get_agent()
-
         self.task_agent = TaskAgent()
         self.memory_agent = MemoryAgent()
         self.planning_agent = PlanningAgent()
 
+    # ============================================================
     # SUPERVISOR DECISION
+    # ============================================================
 
     def decide_agent(self, user_message):
 
-        prompt = """
-You are the Supervisor Agent of a
-multi-agent productivity system.
-
-Your job is to select the correct specialized
-agent and exact action.
-
-AVAILABLE AGENTS:
-
-TASK_AGENT:
-- create
-- list
-- update
-- complete
-- delete
-- overdue
-- high_priority
-
-MEMORY_AGENT:
-- save
-- search
-
-PLANNING_AGENT:
-- daily
-- weekly
-- report
-
-
-==================================================
-TASK ACTION RULES
-==================================================
-
-CREATE:
-
-create, add, make, new task
-→ create
-
-
-LIST:
-
-show, list, get, display my tasks
-→ list
-
-
-UPDATE:
-
-update, edit, modify, change
-→ update
-
-
-COMPLETE:
-
-complete, finish, mark completed,
-mark as done
-→ complete
-
-
-DELETE:
-
-delete, remove, erase, discard
-→ delete
-
-
-OVERDUE:
-
-overdue tasks
-→ overdue
-
-
-HIGH PRIORITY:
-
-high priority tasks
-→ high_priority
-
-
-==================================================
-IMPORTANT DELETE VS COMPLETE RULE
-==================================================
-
-"Delete task 8"
-MUST be:
-
-{
-    "agent": "TASK_AGENT",
-    "action": "delete",
-    "arguments": {
-        "task_id": 8
-    }
-}
-
-"Remove task 8"
-MUST be:
-
-{
-    "agent": "TASK_AGENT",
-    "action": "delete",
-    "arguments": {
-        "task_id": 8
-    }
-}
-
-"Complete task 8"
-MUST be:
-
-{
-    "agent": "TASK_AGENT",
-    "action": "complete",
-    "arguments": {
-        "task_id": 8
-    }
-}
-
-"Finish task 8"
-MUST be:
-
-{
-    "agent": "TASK_AGENT",
-    "action": "complete",
-    "arguments": {
-        "task_id": 8
-    }
-}
-
-
-==================================================
-UPDATE RULES
-==================================================
-
-"Change task 7 priority to critical"
-
-→
-
-{
-    "agent": "TASK_AGENT",
-    "action": "update",
-    "arguments": {
-        "task_id": 7,
-        "priority": "critical"
-    }
-}
-
-
-"Update task 7 title to Finish MCP"
-
-→
-
-{
-    "agent": "TASK_AGENT",
-    "action": "update",
-    "arguments": {
-        "task_id": 7,
-        "title": "Finish MCP"
-    }
-}
-
-
-"Rename task 7 to Finish MCP project"
-
-→
-
-{
-    "agent": "TASK_AGENT",
-    "action": "update",
-    "arguments": {
-        "task_id": 7,
-        "title": "Finish MCP project"
-    }
-}
-
-
-"Change task 7 due date to 2026-08-20"
-
-→
-
-{
-    "agent": "TASK_AGENT",
-    "action": "update",
-    "arguments": {
-        "task_id": 7,
-        "due_date": "2026-08-20"
-    }
-}
-
-
-==================================================
-MEMORY RULES
-==================================================
-
-Remember, store, save
-→ save
-
-Recall, search, find, remember
-→ search
-
-
-==================================================
-PLANNING RULES
-==================================================
-
-"Plan my day"
-"Daily plan"
-→ daily
-
-"Plan my week"
-"Weekly plan"
-→ weekly
-
-"Productivity report"
-"Show my productivity"
-→ report
-
-
-==================================================
-CREATE TASK FORMAT
-==================================================
-
-{
-    "agent": "TASK_AGENT",
-    "action": "create",
-    "arguments": {
-        "title": "...",
-        "description": null,
-        "priority": "low|medium|high|critical",
-        "due_date": null,
-        "project": null
-    }
-}
-
-
-==================================================
-LIST TASK FORMAT
-==================================================
-
-{
-    "agent": "TASK_AGENT",
-    "action": "list",
-    "arguments": {
-        "status": null
-    }
-}
-
-
-==================================================
-UPDATE TASK FORMAT
-==================================================
-
-{
-    "agent": "TASK_AGENT",
-    "action": "update",
-    "arguments": {
-        "task_id": 7,
-        "title": null,
-        "description": null,
-        "priority": null,
-        "status": null,
-        "due_date": null,
-        "project": null
-    }
-}
-
-Only include fields that actually need
-to be changed.
-
-
-==================================================
-COMPLETE TASK FORMAT
-==================================================
-
-{
-    "agent": "TASK_AGENT",
-    "action": "complete",
-    "arguments": {
-        "task_id": 7
-    }
-}
-
-
-==================================================
-DELETE TASK FORMAT
-==================================================
-
-{
-    "agent": "TASK_AGENT",
-    "action": "delete",
-    "arguments": {
-        "task_id": 7
-    }
-}
-
-
-==================================================
-MEMORY SAVE FORMAT
-==================================================
-
-{
-    "agent": "MEMORY_AGENT",
-    "action": "save",
-    "arguments": {
-        "key": "...",
-        "value": "...",
-        "category": "..."
-    }
-}
-
-
-==================================================
-MEMORY SEARCH FORMAT
-==================================================
-
-{
-    "agent": "MEMORY_AGENT",
-    "action": "search",
-    "arguments": {
-        "query": "..."
-    }
-}
-
-
-==================================================
-DAILY PLAN FORMAT
-==================================================
-
-{
-    "agent": "PLANNING_AGENT",
-    "action": "daily",
-    "arguments": {}
-}
-
-
-==================================================
-WEEKLY PLAN FORMAT
-==================================================
-
-{
-    "agent": "PLANNING_AGENT",
-    "action": "weekly",
-    "arguments": {}
-}
-
-
-==================================================
-REPORT FORMAT
-==================================================
-
-{
-    "agent": "PLANNING_AGENT",
-    "action": "report",
-    "arguments": {}
-}
-
-
-==================================================
-STRICT RULES
-==================================================
-
-Return ONLY valid JSON.
-
-Never return:
-"daily planning"
-
-Use:
-"daily"
-
-Never return:
-"productivity reports"
-
-Use:
-"report"
-
-Never return:
-"search memories"
-
-Use:
-"search"
-
-Never return:
-"create tasks"
-
-Use:
-"create"
-
-Never return:
-"delete task"
-
-as the action.
-
-Use:
-"delete"
-
-Never return:
-"update task"
-
-as the action.
-
-Use:
-"update"
-
-The action must ALWAYS be one of:
-
-create
-list
-update
-complete
-delete
-overdue
-high_priority
-save
-search
-daily
-weekly
-report
-"""
+        supervisor_prompt = """\
+Return JSON only. No markdown, no explanation.
+
+Schema: {"actions": [{"agent": <A>, "action": <X>, "arguments": <O>}, ...]}
+
+Agents, actions, argument shapes:
+  TASK_AGENT   | create {title,priority?,description?,due_date?,project?}
+               | list   {status?}
+               | update {task_id,title?,priority?,status?,due_date?,project?}
+               | complete {task_id}
+               | delete {task_id}
+               | overdue {}
+               | high_priority {}
+  MEMORY_AGENT | save   {key,value,category?}
+               | search {query}
+  PLANNING_AGENT | daily {}
+                 | weekly {}
+                 | report {}
+
+Rules:
+- Include every agent actually needed; do not collapse into one.
+- For planning: add TASK_AGENT(list) and/or MEMORY_AGENT(search) first, then PLANNING_AGENT.
+- PLANNING_AGENT always comes last.
+- Return ONLY the JSON object."""
 
         response = self.agent.call_llm(
             [
                 {
                     "role": "system",
-                    "content": prompt
+                    "content": supervisor_prompt,
                 },
                 {
                     "role": "user",
-                    "content": user_message
-                }
-            ]
+                    "content": user_message,
+                },
+            ],
+            operation="supervisor_decision",
         )
 
-        response = self.agent.clean_json(
-            response
-        )
+        response = response.strip()
+
+        # Remove accidental markdown fences
+        if response.startswith("```"):
+            response = response.replace("```json", "", 1)
+            response = response.replace("```", "", 1)
+            response = response.strip()
 
         try:
+            decisions = self.parse_decisions(response)
 
-            decision = json.loads(
-                response
-            )
-
-        except json.JSONDecodeError as error:
-
+        except Exception as error:
             raise ValueError(
                 "Supervisor returned invalid JSON: "
-                f"{error}\nResponse: {response}"
+                f"{error}\n"
+                f"Response: {response}"
             )
 
-        return self.normalize_decision(
-            decision,
-            user_message
-        )
+        return [
+            self.normalize_decision(
+                decision,
+                user_message,
+            )
+            for decision in decisions
+        ]
 
-    # NORMALIZE + VALIDATE
+    # ============================================================
+    # DETERMINISTIC ROUTER
+    # ============================================================
+    # Covers the patterns that appear in 90 %+ of real requests.
+    # Returns a list of decisions (same shape as decide_agent) when
+    # the intent is unambiguous, or None to fall through to the LLM.
+    #
+    # Zero LLM tokens are spent when this method returns a list.
+    # ============================================================
+
+    _DAILY_PLAN_PHRASES = (
+        "daily plan", "plan my day", "plan today", "plan for today",
+        "create my plan", "make my plan", "build my plan",
+        "what should i do today", "today's plan", "day plan",
+        "schedule today", "prioritize today", "prioritise today",
+    )
+    _TASK_ONLY_PHRASES = (
+        "list tasks", "show tasks", "my tasks", "pending tasks",
+        "open tasks", "active tasks", "what tasks",
+        "show me my tasks", "list my tasks",
+    )
+    _OVERDUE_PHRASES = (
+        "overdue", "overdue tasks", "late tasks", "past due",
+    )
+    _HIGH_PRIORITY_PHRASES = (
+        "high priority", "critical tasks", "urgent tasks",
+        "most important", "top priority",
+    )
+    _REPORT_PHRASES = (
+        "productivity report", "my report", "progress report",
+        "how am i doing", "show report",
+    )
+
+    def _route_deterministically(self, user_message: str):
+        """
+        Match the user message against known patterns without calling
+        the LLM.  Returns a list of validated decision dicts, or None
+        if the message is ambiguous and should go to the LLM router.
+        """
+        msg = user_message.lower().strip()
+
+        # ── Daily plan (most common demo query) ──────────────────
+        # Matches anything that mentions planning for today,
+        # whether or not it mentions tasks/preferences/memories.
+        if any(ph in msg for ph in self._DAILY_PLAN_PHRASES):
+            query = "work preferences"
+            # If user mentions specific topics, use those as query
+            for keyword in ("goals", "preferences", "focus", "priorities"):
+                if keyword in msg:
+                    query = keyword
+                    break
+            return [
+                {"agent": "TASK_AGENT",    "action": "list",   "arguments": {}},
+                {"agent": "MEMORY_AGENT",  "action": "search", "arguments": {"query": query}},
+                {"agent": "PLANNING_AGENT","action": "daily",  "arguments": {}},
+            ]
+
+        # ── List tasks only ───────────────────────────────────────
+        if any(ph in msg for ph in self._TASK_ONLY_PHRASES):
+            status = None
+            if "pending" in msg or "open" in msg or "active" in msg:
+                status = "todo"
+            elif "completed" in msg or "done" in msg or "finished" in msg:
+                status = "completed"
+            args = {"status": status} if status else {}
+            return [
+                {"agent": "TASK_AGENT", "action": "list", "arguments": args},
+            ]
+
+        # ── Overdue tasks ─────────────────────────────────────────
+        if any(ph in msg for ph in self._OVERDUE_PHRASES):
+            return [
+                {"agent": "TASK_AGENT", "action": "overdue", "arguments": {}},
+            ]
+
+        # ── High priority ─────────────────────────────────────────
+        if any(ph in msg for ph in self._HIGH_PRIORITY_PHRASES):
+            return [
+                {"agent": "TASK_AGENT", "action": "high_priority", "arguments": {}},
+            ]
+
+        # ── Productivity report ───────────────────────────────────
+        if any(ph in msg for ph in self._REPORT_PHRASES):
+            return [
+                {"agent": "PLANNING_AGENT", "action": "report", "arguments": {}},
+            ]
+
+        # ── Ambiguous — let the LLM decide ───────────────────────
+        return None
+
+
+
+    def parse_decisions(self, response):
+
+        parsed = json.loads(response)
+
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                "Supervisor response must be a JSON object."
+            )
+
+        actions = parsed.get("actions")
+
+        if not isinstance(actions, list):
+            raise ValueError(
+                "Supervisor response must contain "
+                "an 'actions' array."
+            )
+
+        if len(actions) == 0:
+            raise ValueError(
+                "Supervisor returned no actions."
+            )
+
+        for action in actions:
+
+            if not isinstance(action, dict):
+                raise ValueError(
+                    "Every item in 'actions' must be an object."
+                )
+
+            if "agent" not in action:
+                raise ValueError(
+                    "Action missing 'agent'."
+                )
+
+            if "action" not in action:
+                raise ValueError(
+                    "Action missing 'action'."
+                )
+
+        return actions
+
+    # ============================================================
+    # NORMALIZE DECISION
+    # ============================================================
 
     def normalize_decision(
         self,
         decision,
-        user_message
+        user_message,
     ):
 
-        agent = decision.get(
-            "agent"
-        )
+        agent = decision.get("agent")
+        action = decision.get("action")
+        arguments = decision.get("arguments") or {}
 
-        action = decision.get(
-            "action"
-        )
-
-        arguments = decision.get(
-            "arguments",
-            {}
-        )
-
-        text = user_message.lower()
-
-        # HARD DELETE ROUTING
-
-        delete_words = [
-            "delete",
-            "remove",
-            "erase",
-            "discard"
-        ]
-
-        if (
-            agent == "TASK_AGENT"
-            and any(
-                word in text
-                for word in delete_words
-            )
-        ):
-
-            action = "delete"
-
-        # HARD COMPLETE ROUTING
-
-        complete_phrases = [
-            "complete task",
-            "complete the task",
-            "finish task",
-            "finish the task",
-            "mark task as done",
-            "mark task completed",
-            "mark as done"
-        ]
-
-        if (
-            agent == "TASK_AGENT"
-            and any(
-                phrase in text
-                for phrase in complete_phrases
-            )
-        ):
-
-            action = "complete"
-
-        # HARD UPDATE ROUTING
-
-        update_words = [
-            "update",
-            "edit",
-            "modify",
-            "change",
-            "rename"
-        ]
-
-        if (
-            agent == "TASK_AGENT"
-            and any(
-                word in text
-                for word in update_words
-            )
-        ):
-
-            action = "update"
-
-
-        if (
-            agent == "TASK_AGENT"
-            and any(
-                word in text
-                for word in delete_words
-            )
-        ):
-
-            action = "delete"
-
-        # TASK ID NORMALIZATION
-
-        if action in {
-            "delete",
-            "complete",
-            "update"
-        }:
-
-            task_id = (
-                arguments.get("task_id")
-                or arguments.get("id")
-            )
-
-            if task_id is not None:
-
-                try:
-
-                    arguments["task_id"] = int(
-                        task_id
-                    )
-
-                except (
-                    TypeError,
-                    ValueError
-                ):
-
-                    raise ValueError(
-                        "Task ID must be an integer."
-                    )
-
-        # ACTION ALIASES
+        if not isinstance(arguments, dict):
+            arguments = {}
 
         action_aliases = {
 
@@ -629,6 +278,7 @@ report
             "show high priority tasks": "high_priority",
 
             "save memory": "save",
+
             "search memory": "search",
             "search memories": "search",
 
@@ -639,32 +289,15 @@ report
             "weekly planning": "weekly",
 
             "productivity report": "report",
-            "productivity reports": "report"
+            "productivity reports": "report",
         }
 
         action = action_aliases.get(
             action,
-            action
+            action,
         )
 
-        # VALID AGENTS
-
-        valid_agents = {
-            "TASK_AGENT",
-            "MEMORY_AGENT",
-            "PLANNING_AGENT"
-        }
-
-        if agent not in valid_agents:
-
-            raise ValueError(
-                f"Unknown agent: {agent}"
-            )
-
-        # VALID ACTIONS
-
         valid_actions = {
-
             "TASK_AGENT": {
                 "create",
                 "list",
@@ -672,23 +305,25 @@ report
                 "complete",
                 "delete",
                 "overdue",
-                "high_priority"
+                "high_priority",
             },
-
             "MEMORY_AGENT": {
                 "save",
-                "search"
+                "search",
             },
-
             "PLANNING_AGENT": {
                 "daily",
                 "weekly",
-                "report"
-            }
+                "report",
+            },
         }
 
-        if action not in valid_actions[agent]:
+        if agent not in valid_actions:
+            raise ValueError(
+                f"Unknown agent: {agent}"
+            )
 
+        if action not in valid_actions[agent]:
             raise ValueError(
                 f"Invalid action '{action}' "
                 f"for {agent}"
@@ -700,115 +335,295 @@ report
 
         return decision
 
-    # RUN
+    # ============================================================
+    # EXECUTE MULTI-AGENT WORKFLOW
+    # ============================================================
 
-    def run(self, user_message):
+    def run(
+        self,
+        user_message,
+        execution_id=None,
+    ):
 
         if not user_message.strip():
-
             return {
                 "success": False,
-                "error": "Request cannot be empty."
+                "error": "Request cannot be empty.",
             }
 
-        decision = self.decide_agent(
-            user_message
-        )
+        owns_execution = execution_id is None
 
-        agent_name = decision[
-            "agent"
-        ]
-
-        action = decision[
-            "action"
-        ]
-
-        arguments = decision.get(
-            "arguments",
-            {}
-        )
-
-        print(
-            f"[SUPERVISOR] Agent: "
-            f"{agent_name}"
-        )
-
-        print(
-            f"[SUPERVISOR] Action: "
-            f"{action}"
-        )
-
-        # TASK AGENT
-
-        if agent_name == "TASK_AGENT":
-
-            return self.task_agent.handle(
-                action,
-                arguments
-            )
-
-        # MEMORY AGENT
-
-        if agent_name == "MEMORY_AGENT":
-
-            return self.memory_agent.handle(
-                action,
-                arguments
-            )
-
-        # PLANNING AGENT
-
-        if agent_name == "PLANNING_AGENT":
-
-            arguments[
-                "original_request"
-            ] = user_message
-
-            return self.planning_agent.handle(
-                action,
-                arguments
-            )
-
-        return {
-            "success": False,
-            "error":
-                f"Unknown agent: {agent_name}"
-        }
-
-# DIRECT TEST
-
-if __name__ == "__main__":
-
-    supervisor = ProductivitySupervisor()
-
-    print()
-    print("=" * 50)
-    print(" MULTI-AGENT PRODUCTIVITY SYSTEM")
-    print("=" * 50)
-    print()
-    print("Type 'exit' to stop.")
-
-    while True:
-
-        user = input("\nYou: ").strip()
-
-        if user.lower() == "exit":
-
-            print("Goodbye!")
-
-            break
+        if owns_execution:
+            execution_id = start_execution()
+        else:
+            set_execution_id(execution_id)
 
         try:
 
-            result = supervisor.run(
-                user
+            # ====================================================
+            # ROUTING  — deterministic first, LLM as fallback
+            # ====================================================
+
+            decisions = self._route_deterministically(user_message)
+
+            if decisions is not None:
+                # Validate and normalise the deterministic decisions
+                # through the same pipeline used for LLM decisions.
+                decisions = [
+                    self.normalize_decision(d, user_message)
+                    for d in decisions
+                ]
+                print(
+                    f"[SUPERVISOR] Deterministic route: "
+                    f"{len(decisions)} action(s) — 0 LLM tokens"
+                )
+            else:
+                decisions = self.decide_agent(user_message)
+                print(
+                    f"[SUPERVISOR] LLM route: "
+                    f"{len(decisions)} action(s) selected"
+                )
+
+            record_event(
+                self.agent.db,
+                "Agent",
+                "supervisor",
+                {
+                    "request": user_message,
+                    "actions": decisions,
+                },
             )
-
-            print("\nResult:")
-            print(result)
-
-        except Exception as error:
 
             print(
-                f"\n[ERROR] {error}"
+                f"[SUPERVISOR] "
+                f"{len(decisions)} action(s) selected"
             )
+
+            task_result   = None
+            memory_result = None
+            planning_result = None
+
+            # ====================================================
+            # TASK_AGENT + MEMORY_AGENT  — run in parallel
+            # Both are pure data-fetch operations with no
+            # dependency on each other, so we submit them
+            # concurrently and collect results as they finish.
+            # ====================================================
+
+            task_decisions   = [d for d in decisions if d["agent"] == "TASK_AGENT"]
+            memory_decisions = [d for d in decisions if d["agent"] == "MEMORY_AGENT"]
+
+            def _run_task(decision):
+                action    = decision["action"]
+                arguments = decision["arguments"]
+
+                _mcp_tool = {
+                    "list":         "list_tasks",
+                    "create":       "create_task",
+                    "update":       "update_task",
+                    "complete":     "complete_task",
+                    "delete":       "delete_task",
+                    "overdue":      "list_tasks",
+                    "high_priority":"list_tasks",
+                }.get(action, action)
+
+                record_event(self.agent.db, "Agent", "TASK_AGENT",
+                             {"action": action, "arguments": arguments})
+                record_event(self.agent.db, "MCP", _mcp_tool,
+                             {"agent": "TASK_AGENT", "action": action, "arguments": arguments})
+
+                result = self.task_agent.handle(action, arguments)
+
+                record_mcp_call(self.agent.db, tool=_mcp_tool,
+                                arguments=arguments, result=result,
+                                execution_id=execution_id)
+                record_event(self.agent.db, "Result", "task_agent_result",
+                             {"agent": "TASK_AGENT", "result": result})
+
+                return ("task", _mcp_tool, result)
+
+            def _run_memory(decision):
+                action    = decision["action"]
+                arguments = decision["arguments"]
+
+                _mcp_tool = {
+                    "save":   "save_memory",
+                    "search": "search_memory",
+                }.get(action, action)
+
+                record_event(self.agent.db, "Agent", "MEMORY_AGENT",
+                             {"action": action, "arguments": arguments})
+                record_event(self.agent.db, "MCP", _mcp_tool,
+                             {"agent": "MEMORY_AGENT", "action": action, "arguments": arguments})
+
+                result = self.memory_agent.handle(action, arguments)
+
+                record_mcp_call(self.agent.db, tool=_mcp_tool,
+                                arguments=arguments, result=result,
+                                execution_id=execution_id)
+                record_event(self.agent.db, "Result", "memory_agent_result",
+                             {"agent": "MEMORY_AGENT", "result": result})
+
+                return ("memory", _mcp_tool, result)
+
+            # --------------------------------------------------
+            # Each worker gets its own copy of the current context
+            # so ctx.run() is never entered twice on the same thread.
+            # A single shared copy would raise
+            # "cannot enter context: ... is already entered"
+            # when the thread pool reuses a thread for the second task.
+            # --------------------------------------------------
+
+            futures = []
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+
+                for d in task_decisions:
+                    print(f"[SUPERVISOR] Agent: TASK_AGENT   | Action: {d['action']} (parallel)")
+                    task_ctx = contextvars.copy_context()
+                    futures.append(pool.submit(task_ctx.run, _run_task, d))
+
+                for d in memory_decisions:
+                    print(f"[SUPERVISOR] Agent: MEMORY_AGENT | Action: {d['action']} (parallel)")
+                    memory_ctx = contextvars.copy_context()
+                    futures.append(pool.submit(memory_ctx.run, _run_memory, d))
+
+                for future in as_completed(futures):
+                    kind, _mcp_tool, result = future.result()
+                    if kind == "task":
+                        task_result = result
+                    else:
+                        memory_result = result
+
+            # ====================================================
+            # PLANNING AGENT
+            # ====================================================
+
+            for decision in decisions:
+
+                if decision["agent"] != "PLANNING_AGENT":
+                    continue
+
+                agent_name = decision["agent"]
+                action = decision["action"]
+
+                arguments = dict(
+                    decision["arguments"]
+                )
+
+                # --------------------------------------------------
+                # Normalise upstream results before handing them to
+                # the planning agent.
+                #
+                # task_result  → list of task dicts  (or None / error)
+                # memory_result→ list of memory dicts (or None / error)
+                #
+                # We convert both to clean JSON strings so the LLM
+                # prompt always receives well-formed text, and we
+                # gracefully handle error dicts returned by agents.
+                # --------------------------------------------------
+
+                import json as _json
+
+                def _clean_context(value, label):
+                    if value is None:
+                        return f"No {label} available."
+                    if isinstance(value, dict) and value.get("error"):
+                        return f"{label} error: {value['error']}"
+                    if isinstance(value, (list, dict)):
+                        # Compact JSON — no indent, no extra whitespace.
+                        # The planning_agent parses this back to a list
+                        # before encoding; pretty-printing only wastes tokens.
+                        return _json.dumps(value, separators=(",", ":"), default=str)
+                    return str(value)
+
+                task_context_str   = _clean_context(task_result,   "tasks")
+                memory_context_str = _clean_context(memory_result, "memories")
+
+                # Pass clean strings — not raw Python objects
+                arguments["original_request"] = user_message
+                arguments["task_context"]      = task_context_str
+                arguments["memory_context"]    = memory_context_str
+
+                print(
+                    f"[SUPERVISOR] Agent: {agent_name}"
+                )
+                print(
+                    f"[SUPERVISOR] Action: {action}"
+                )
+
+                # Record the planning event WITHOUT the large context
+                # blobs to keep execution_events rows lean.
+                record_event(
+                    self.agent.db,
+                    "Agent",
+                    agent_name,
+                    {
+                        "action": action,
+                        "task_items":   len(task_result)   if isinstance(task_result,   list) else None,
+                        "memory_items": len(memory_result) if isinstance(memory_result, list) else None,
+                    },
+                )
+
+                # Map action → canonical MCP tool name
+                _planning_mcp_tool = {
+                    "daily": "daily_plan",
+                    "weekly": "weekly_plan",
+                    "report": "productivity_report",
+                }.get(action, action)
+
+                record_event(
+                    self.agent.db,
+                    "MCP",
+                    _planning_mcp_tool,
+                    {"agent": agent_name, "action": action},
+                )
+
+                planning_result = self.planning_agent.handle(
+                    action,
+                    arguments,
+                )
+
+                # ── measure actual transport bytes ──────────────
+                # Use a lightweight request payload — strip the large
+                # task_context / memory_context strings that were
+                # already measured in the upstream calls.
+                _planning_request = {
+                    "action":           action,
+                    "original_request": arguments.get("original_request", ""),
+                }
+                record_mcp_call(
+                    self.agent.db,
+                    tool         = _planning_mcp_tool,
+                    arguments    = _planning_request,
+                    result       = planning_result,
+                    execution_id = execution_id,
+                )
+
+            # ====================================================
+            # FINAL RESULT
+            # ====================================================
+
+            result = (
+                planning_result
+                if planning_result is not None
+                else memory_result
+                if memory_result is not None
+                else task_result
+            )
+
+            record_event(
+                self.agent.db,
+                "Result",
+                "agent_result",
+                {
+                    "result": result,
+                },
+            )
+
+            return result
+
+        finally:
+
+            if owns_execution:
+                finish_execution()

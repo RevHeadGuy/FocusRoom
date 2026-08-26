@@ -1,8 +1,11 @@
 import json
 import hmac
 import os
+from functools import wraps
+from datetime import datetime
 from typing import Optional
 
+from .database import Database
 from mcp.server import MCPServer
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -10,6 +13,41 @@ from starlette.responses import JSONResponse
 
 from .agent import get_agent
 from .orchestrator import ProductivitySupervisor
+from .telemetry import finish_execution, record_event, start_execution
+
+
+def trace_mcp_tool(function):
+
+    @wraps(function)
+    def traced_tool(*args, **kwargs):
+
+        execution_id = start_execution()
+        agent = get_agent()
+
+        record_event(
+            agent.db,
+            "MCP Tool",
+            function.__name__,
+            {"arguments": kwargs}
+        )
+
+        try:
+
+            result = function(*args, **kwargs)
+
+            record_event(
+                agent.db,
+                "Result",
+                "mcp_result",
+                {"result": result}
+            )
+
+            return result
+
+        finally:
+            finish_execution()
+
+    return traced_tool
 
 
 # MCP SERVER
@@ -129,10 +167,77 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class TransportMetricsMiddleware:
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_bytes = 0
+        response_bytes = 0
+        status_code = 500
+        transport_id = None
+
+        async def measured_receive():
+
+            nonlocal request_bytes
+
+            message = await receive()
+
+            if message["type"] == "http.request":
+                request_bytes += len(message.get("body", b""))
+
+            return message
+
+        async def measured_send(message):
+
+            nonlocal response_bytes, status_code, transport_id
+
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+
+                if transport_id is None:
+                    transport_id = Database().start_mcp_transport({
+                        "method": scope["method"],
+                        "path": scope["path"],
+                        "request_bytes": request_bytes,
+                        "status_code": status_code,
+                        "created_at": datetime.now().isoformat()
+                    })
+
+            if message["type"] == "http.response.body":
+                response_bytes += len(message.get("body", b""))
+
+                if transport_id is not None:
+                    Database().update_mcp_transport(
+                        transport_id,
+                        response_bytes,
+                        status_code
+                    )
+
+            await send(message)
+
+        await self.app(
+            scope,
+            measured_receive,
+            measured_send
+        )
+
+
+
 def create_app(api_key=None):
 
     app = mcp.streamable_http_app(
         host="127.0.0.1"
+    )
+
+    app.add_middleware(
+        TransportMetricsMiddleware
     )
 
     api_key = api_key or os.getenv("MCP_API_KEY")
@@ -161,10 +266,27 @@ def productivity_assistant(
 
         return error_result("Request cannot be empty.")
 
+    execution_id = start_execution()
+
+    record_event(
+        supervisor.agent.db,
+        "MCP Tool",
+        "productivity_assistant",
+        {"request": request}
+    )
+
     try:
 
         result = supervisor.run(
-            request.strip()
+            request.strip(),
+            execution_id=execution_id
+        )
+
+        record_event(
+            supervisor.agent.db,
+            "Result",
+            "mcp_result",
+            {"result": result}
         )
 
         return success_result({
@@ -176,9 +298,13 @@ def productivity_assistant(
 
         return error_result(str(error))
 
+    finally:
+        finish_execution()
+
 # CREATE TASK
 
 @mcp.tool()
+@trace_mcp_tool
 def create_task(
     title: str,
     priority: str = "medium",
@@ -234,6 +360,7 @@ def create_task(
 # LIST TASKS
 
 @mcp.tool()
+@trace_mcp_tool
 def list_tasks(
     status: Optional[str] = None
 ) -> str:
@@ -260,6 +387,7 @@ def list_tasks(
 # UPDATE TASK
 
 @mcp.tool()
+@trace_mcp_tool
 def update_task(
     task_id: int,
     title: Optional[str] = None,
@@ -337,6 +465,7 @@ def update_task(
 # COMPLETE TASK
 
 @mcp.tool()
+@trace_mcp_tool
 def complete_task(
     task_id: int
 ) -> str:
@@ -365,6 +494,7 @@ def complete_task(
 # DELETE TASK
 
 @mcp.tool()
+@trace_mcp_tool
 def delete_task(
     task_id: int
 ) -> str:
@@ -390,6 +520,7 @@ def delete_task(
 # SAVE MEMORY
 
 @mcp.tool()
+@trace_mcp_tool
 def save_memory(
     key: str,
     value: str,
@@ -428,6 +559,7 @@ def save_memory(
 # SEARCH MEMORY
 
 @mcp.tool()
+@trace_mcp_tool
 def search_memory(
     query: str
 ) -> str:
@@ -458,6 +590,7 @@ def search_memory(
 # DAILY PLAN
 
 @mcp.tool()
+@trace_mcp_tool
 def daily_plan() -> str:
     """
     Generate today's productivity plan.
@@ -480,6 +613,7 @@ def daily_plan() -> str:
 # PRODUCTIVITY REPORT
 
 @mcp.tool()
+@trace_mcp_tool
 def productivity_report() -> str:
     """
     Generate a productivity report.

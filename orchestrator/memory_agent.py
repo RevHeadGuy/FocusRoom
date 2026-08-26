@@ -1,4 +1,5 @@
 from .agent import get_agent
+from .telemetry import record_event
 
 
 class MemoryAgent:
@@ -9,6 +10,19 @@ class MemoryAgent:
     def handle(self, action, arguments):
 
         action = action.lower().strip()
+
+        # NOTE: the supervisor already records an "Agent / MEMORY_AGENT"
+        # event before calling handle().  We only record here when
+        # invoked directly (i.e. when there is no active execution_id),
+        # so the trace never shows the same agent step twice.
+        from .telemetry import get_execution_id
+        if not get_execution_id():
+            record_event(
+                self.agent.db,
+                "Agent",
+                "MEMORY_AGENT",
+                {"action": action, "arguments": arguments}
+            )
 
         aliases = {
             "save memory": "save",

@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from groq import Groq
 
 from .database import Database
+from .telemetry import get_execution_id, record_event
 
 
 load_dotenv()
@@ -44,13 +45,43 @@ class ProductivityOrchestrator:
     # LLM
     # ==================================================
 
-    def call_llm(self, messages):
+    def call_llm(self, messages, operation="llm_call", max_tokens=None):
 
-        response = self.client.chat.completions.create(
+        kwargs = dict(
             model=self.model,
             messages=messages,
-            temperature=0
+            temperature=0,
         )
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+
+        response = self.client.chat.completions.create(**kwargs)
+
+        usage = getattr(response, "usage", None)
+
+        usage_details = {
+            "operation": operation,
+            "model": getattr(response, "model", self.model),
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+            "completion_tokens": getattr(usage, "completion_tokens", 0),
+            "total_tokens": getattr(usage, "total_tokens", 0),
+            "usage_available": usage is not None
+        }
+
+        if usage is not None:
+
+            self.db.save_token_usage({
+                **usage_details,
+                "created_at": datetime.now().isoformat()
+            })
+
+        if get_execution_id():
+            record_event(
+                self.db,
+                "LLM",
+                operation,
+                usage_details
+            )
 
         return response.choices[0].message.content
 
@@ -577,6 +608,28 @@ class ProductivityOrchestrator:
             if task.get("project")
         }
 
+        token_usage = self.db.get_token_usage_totals()
+
+        # Per-execution stats for the most recent run
+        recent_executions = self.db.get_recent_execution_events(5)
+
+        latest_execution_id = (
+            recent_executions[0]["execution_id"]
+            if recent_executions else None
+        )
+
+        current_execution_transport = (
+            self.db.get_mcp_transport_for_execution(latest_execution_id)
+            if latest_execution_id else
+            {"requests": 0, "request_bytes": 0, "response_bytes": 0}
+        )
+
+        current_execution_token_usage = (
+            self.db.get_token_usage_for_execution(latest_execution_id)
+            if latest_execution_id else
+            {"by_operation": [], "totals": {}}
+        )
+
         return {
             "total_tasks":
                 total_tasks,
@@ -603,7 +656,36 @@ class ProductivityOrchestrator:
                 len(projects),
 
             "memory_items":
-                len(memories)
+                len(memories),
+
+            "token_usage": token_usage,
+
+            "token_usage_by_operation":
+                self.db.get_token_usage_by_operation(),
+
+            "avg_tokens_per_execution":
+                self.db.get_avg_tokens_per_execution(),
+
+            "mcp_transport":
+                self.db.get_mcp_transport_totals(),
+
+            "mcp_tool_counts":
+                self.db.get_mcp_tool_call_counts(),
+
+            "agent_execution_status":
+                self.db.get_agent_execution_status(),
+
+            "current_execution_id":
+                latest_execution_id,
+
+            "current_execution_transport":
+                current_execution_transport,
+
+            "current_execution_token_usage":
+                current_execution_token_usage,
+
+            "recent_executions":
+                recent_executions,
         }
 
 
