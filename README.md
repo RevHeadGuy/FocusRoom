@@ -1,4 +1,4 @@
-# Productivity Agent
+# FocusRoom | Productivity Agent
 
 A personal productivity workspace built with Python, Streamlit, Groq, SQLite, and MCP. It combines task management, daily planning, persistent memories, a multi-agent supervisor, and optional email reminders in one project.
 
