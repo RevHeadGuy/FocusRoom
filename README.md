@@ -1,232 +1,555 @@
-# FocusRoom | Productivity Agent
+# FocusRoom
 
-A personal productivity workspace built with Python, Streamlit, Groq, SQLite, and MCP. It combines task management, daily planning, persistent memories, a multi-agent supervisor, and optional email reminders in one project.
+> **Make room for the work that matters.**
 
-    
-## Features
+FocusRoom is an AI-powered **Productivity Operating System** that turns
+natural-language requests into actions across tasks, persistent memory,
+daily planning, and a multi-agent orchestration layer.
 
-- Streamlit productivity dashboard
-- Create, list, filter, and complete tasks
-- Task priorities, due dates, projects, and statuses
-- Persistent SQLite storage in `productivity.db`
-- Daily plans and productivity reports
-- Save and search personal memories
-- Groq-powered productivity assistant
-- Multi-agent supervisor for task, memory, and planning requests
-- MCP server with HTTP tools for external clients
-- Optional automatic email reminders
-- AI token, agent, MCP, and execution-trace telemetry
+Instead of forcing users to manage several productivity features
+separately, FocusRoom gives them one assistant that can understand
+intent, call the right specialist agents, use MCP tools, and return a
+focused result.
 
-## Requirements
+------------------------------------------------------------------------
 
-- Python 3.10 or newer
-- A Groq API key for the AI features
-- Gmail SMTP credentials or another SMTP provider for email reminders
+## ✨ What makes FocusRoom different?
 
-## Setup
+FocusRoom is built around one idea:
 
-### 1. Create a virtual environment
+**The assistant should do the coordination, not the user.**
 
-PowerShell:
+A request such as:
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+> *"Check my pending tasks, consider my work preferences, and create my
+> daily plan."*
+
+can flow through the system as:
+
+``` text
+User Request
+     │
+     ▼
+┌───────────────┐
+│   Supervisor  │
+│ Intent / Route│
+└───────┬───────┘
+        │
+   ┌────┴──────────────┐
+   ▼                   ▼
+Task Agent        Memory Agent
+   │                   │
+   ▼                   ▼
+list_tasks        search_memory
+   │                   │
+   └─────────┬─────────┘
+             ▼
+      Planning Agent
+             │
+             ▼
+        daily_plan
+             │
+             ▼
+       Focused Result
 ```
 
-If PowerShell blocks script execution for the current session:
+The project combines **multi-agent orchestration + MCP + persistent
+memory + task management + AI planning** in one productivity workflow.
 
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-.\.venv\Scripts\Activate.ps1
+------------------------------------------------------------------------
+
+## 🚀 Core capabilities
+
+### 🧠 Natural-language assistant
+
+Users can interact with FocusRoom conversationally rather than learning
+individual commands.
+
+Examples:
+
+``` text
+Show my pending tasks
 ```
 
-### 2. Install dependencies
-
-```powershell
-python -m pip install -r requirements.txt
+``` text
+Create a task called Prepare Q3 presentation with high priority.
 ```
 
-### 3. Configure environment variables
-
-Copy `.env.example` to `.env` and fill in the values:
-
-```powershell
-Copy-Item .env.example .env
+``` text
+Plan my day and prioritize my MCP learning.
 ```
 
-Required for the Groq-backed agent:
-
-```dotenv
-GROQ_API_KEY=your_groq_api_key
-GROQ_MODEL=openai/gpt-oss-120b
+``` text
+Check my pending tasks and create my daily plan.
 ```
 
-Optional MCP configuration:
+The `ProductivitySupervisor` interprets the request and routes work to
+the appropriate agent.
 
-```dotenv
-MCP_HOST=127.0.0.1
-MCP_PORT=8000
-MCP_API_KEY=local_or_remote_api_key
+------------------------------------------------------------------------
+
+### 🤖 Multi-agent architecture
+
+FocusRoom separates responsibilities across specialized agents:
+
+  -----------------------------------------------------------------------
+  Agent                               Responsibility
+  ----------------------------------- -----------------------------------
+  **Supervisor**                      Understands intent and coordinates
+                                      execution
+
+  **Task Agent**                      Creates, lists, updates, completes,
+                                      and deletes tasks
+
+  **Memory Agent**                    Stores and retrieves persistent
+                                      user context
+
+  **Planning Agent**                  Converts task + memory context into
+                                      a daily plan
+  -----------------------------------------------------------------------
+
+This keeps individual components focused while allowing them to
+collaborate.
+
+------------------------------------------------------------------------
+
+### 🧩 MCP integration
+
+FocusRoom exposes productivity capabilities through an MCP server.
+
+Current MCP tools include:
+
+``` text
+productivity_assistant
+create_task
+list_tasks
+update_task
+complete_task
+delete_task
+save_memory
+search_memory
+daily_plan
+productivity_report
 ```
 
-For email reminders:
+The MCP layer provides a standardized tool interface between the
+assistant and productivity operations.
 
-```dotenv
-EMAIL_SENDER=your_email@gmail.com
-EMAIL_RECIPIENT=recipient@example.com
-EMAIL_PASSWORD=your_smtp_or_app_password
-SMTP_SERVER=smtp.gmail.com
-SMTP_PORT=587
+The project also includes MCP transport telemetry for measuring:
+
+-   Request count
+-   Request bytes
+-   Response bytes
+-   HTTP status
+-   Transport activity
+-   Execution IDs
+
+------------------------------------------------------------------------
+
+### 📅 AI daily planning
+
+The planning workflow combines:
+
+``` text
+Tasks
+  +
+Relevant memories
+  +
+User request
+  ↓
+Planning Agent
+  ↓
+Morning / Afternoon / Evening
+  +
+Priority reasoning
 ```
 
-Do not commit `.env` or API credentials. They are excluded by `.gitignore`.
+The planner is designed to avoid inventing tasks and instead schedule
+work from the available task context.
 
-## Run the Streamlit app
+------------------------------------------------------------------------
 
-```powershell
-streamlit run streamlit_app.py
+## ⚡ Token-efficient AI pipeline
+
+A major engineering focus of FocusRoom is reducing unnecessary LLM
+usage.
+
+The planning pipeline uses several optimizations:
+
+### 1. Deterministic routing
+
+Common requests can bypass the supervisor LLM.
+
+For example:
+
+``` text
+"plan my day"
+"daily plan"
+"create my daily plan"
 ```
 
-The app provides these sections:
+can be recognized directly and routed to:
 
-- **Overview** - task metrics, active work, daily snapshot, and completion progress
-- **Tasks** - create and filter tasks, then mark tasks complete
-- **Plan** - view the current daily plan and productivity report
-- **Memory** - save and search persistent context
-- **Assistant** - send natural-language requests to the productivity supervisor
-
-## Run the MCP server
-
-Start the Streamable HTTP MCP server with:
-
-```powershell
-python -m orchestrator.mcp_server
+``` text
+TASK_AGENT → MEMORY_AGENT → PLANNING_AGENT
 ```
 
-By default, it runs on `http://127.0.0.1:8000/mcp`.
+The LLM remains available as a fallback for requests that cannot be
+confidently classified.
 
-The server exposes tools for:
+### 2. Task filtering
 
-- `productivity_assistant`
-- `create_task`
-- `list_tasks`
-- `update_task`
-- `complete_task`
-- `delete_task`
-- `save_memory`
-- `search_memory`
-- `daily_plan`
-- `productivity_report`
+Only relevant active tasks are passed into the planning prompt.
 
-When binding the MCP server to a non-local host, set `MCP_API_KEY`. Remote requests must use a bearer token:
+### 3. Compact task representation
 
-```text
+Instead of sending verbose task JSON, the planner receives compact
+representations such as:
+
+``` text
+!! Ship landing page (08-25)
+! Write tests (08-25)
+- Update docs
+```
+
+### 4. Memory limiting
+
+Only a small number of relevant/recent memories are included rather than
+sending the entire memory store.
+
+### 5. Compact context serialization
+
+Planning context uses compact JSON instead of human-formatted indented
+JSON.
+
+### 6. Completion limits
+
+The planning model has a maximum completion-token budget so that a
+simple daily plan cannot produce unnecessarily long output.
+
+### Example optimization target
+
+A representative planning prompt was reduced to approximately:
+
+``` text
+~124 prompt tokens
++ up to 400 completion tokens
+≈ 524-token planning budget
+```
+
+The exact token usage depends on the model, input data, and generated
+response.
+
+------------------------------------------------------------------------
+
+## 📊 Built-in execution telemetry
+
+FocusRoom records execution information so the system can be measured
+instead of treated as a black box.
+
+Example telemetry:
+
+``` text
+AI USAGE
+
+Operation                 Prompt   Completion   Total
+------------------------------------------------------
+supervisor_decision        ...       ...        ...
+planning_request           ...       ...        ...
+TOTAL                      ...       ...        ...
+AVG / exec                 ...       ...        ...
+```
+
+Execution traces expose the path taken by a request:
+
+``` text
+supervisor
+    ↓
+TASK_AGENT
+    ↓
+MCP:list_tasks
+    ↓
+MEMORY_AGENT
+    ↓
+MCP:search_memory
+    ↓
+PLANNING_AGENT
+    ↓
+MCP:daily_plan
+    ↓
+LLM:planning_request
+    ↓
+agent_result
+```
+
+This makes it possible to investigate:
+
+-   unnecessary LLM calls
+-   excessive prompt size
+-   expensive tool calls
+-   response payload growth
+-   agent routing problems
+-   MCP transport overhead
+
+------------------------------------------------------------------------
+
+## 🏗️ Architecture
+
+``` text
+                         ┌──────────────────┐
+                         │    Streamlit UI  │
+                         └────────┬─────────┘
+                                  │
+                                  ▼
+                    ┌─────────────────────────┐
+                    │ Productivity Assistant  │
+                    └────────────┬────────────┘
+                                 │
+                                 ▼
+                    ┌─────────────────────────┐
+                    │ Productivity Supervisor │
+                    │                         │
+                    │ deterministic router    │
+                    │ + LLM fallback          │
+                    └───────┬─────┬─────┬─────┘
+                            │     │     │
+                  ┌─────────┘     │     └─────────┐
+                  ▼               ▼               ▼
+           ┌────────────┐  ┌────────────┐  ┌──────────────┐
+           │ Task Agent │  │Memory Agent│  │Planning Agent│
+           └─────┬──────┘  └─────┬──────┘  └──────┬───────┘
+                 │               │                 │
+                 ▼               ▼                 ▼
+           list/create      search/save        daily plan
+                 │               │                 │
+                 └───────────────┼─────────────────┘
+                                 ▼
+                         ┌──────────────┐
+                         │ MCP Server   │
+                         │ + Transport  │
+                         │ + Telemetry  │
+                         └──────┬───────┘
+                                │
+                                ▼
+                         ┌──────────────┐
+                         │   Database   │
+                         └──────────────┘
+```
+
+For detailed implementation decisions, see:
+
+-   `lld.md`
+-   `architecture.md`
+
+------------------------------------------------------------------------
+
+## 🗂️ Project structure
+
+``` text
+FocusRoom/
+│
+├── orchestrator/
+│   ├── agent.py
+│   ├── database.py
+│   ├── mcp_server.py
+│   ├── mcp_transport.py
+│   ├── memory_agent.py
+│   ├── orchestrator.py
+│   ├── planning_agent.py
+│   ├── task_agent.py
+│   └── telemetry.py
+│
+├── streamlit_app.py
+├── README.md
+├── lld.md
+└── architecture.md
+```
+
+------------------------------------------------------------------------
+
+## 🔄 Example request lifecycle
+
+### User
+
+``` text
+"Check my pending tasks and create my daily plan."
+```
+
+### Supervisor
+
+Determines that the request needs:
+
+``` text
+TASK_AGENT:list
+MEMORY_AGENT:search
+PLANNING_AGENT:daily
+```
+
+### Task Agent
+
+Retrieves active tasks.
+
+### Memory Agent
+
+Retrieves relevant persistent context when needed.
+
+### Planning Agent
+
+Receives a compact context containing the information required to
+schedule the work.
+
+### Result
+
+``` text
+MORNING
+- Prepare the Q3 project demo
+
+AFTERNOON
+- Continue project documentation
+
+EVENING
+- No tasks scheduled
+
+PRIORITY REASONING
+- The highest-priority deadline-sensitive work is scheduled first.
+```
+
+------------------------------------------------------------------------
+
+## 🛠️ Technology stack
+
+  Layer                Technology
+  -------------------- --------------------------------------
+  UI                   Streamlit
+  Language             Python
+  AI                   LLM-based agent orchestration
+  Agent architecture   Supervisor + specialized agents
+  Tool protocol        MCP
+  MCP transport        Streamable HTTP
+  Persistence          Database-backed task/memory storage
+  Telemetry            AI execution + MCP transport metrics
+
+------------------------------------------------------------------------
+
+## 🔐 MCP security
+
+The MCP server supports API-key authentication for non-local
+deployments.
+
+The server validates:
+
+``` text
 Authorization: Bearer <MCP_API_KEY>
 ```
 
-## Run reminders
+Local development can run without authentication when bound to a local
+host.
 
-The reminder worker checks upcoming tasks and sends configured email notifications:
+------------------------------------------------------------------------
 
-```powershell
-python reminder_worker.py
+## ▶️ Running the project
+
+Create and activate the virtual environment:
+
+``` powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 ```
 
-The reminder schedule is configured in the worker and supports reminders at 24 hours, 1 hour, and 15 minutes before a task is due. Email reminders require valid SMTP settings in `.env`.
+Install dependencies:
 
-## Run tests
-
-Use the project virtual environment so pytest is available:
-
-```powershell
-.\.venv\Scripts\python -m pytest -q
+``` powershell
+pip install -r requirements.txt
 ```
 
-To run a specific test file:
+Configure environment variables as required by the project.
 
-```powershell
-.\.venv\Scripts\python -m pytest -q test_multi_agent.py
+Start the Streamlit application:
+
+``` powershell
+streamlit run streamlit_app.py
 ```
 
-To check Python syntax without starting the app:
+The MCP server can be started through the project's MCP server entry
+point.
 
-```powershell
-.\.venv\Scripts\python -m compileall streamlit_app.py orchestrator
+------------------------------------------------------------------------
+
+## 🧪 Development philosophy
+
+FocusRoom is intentionally designed around measurable agent execution.
+
+Instead of simply asking:
+
+> "Does the assistant work?"
+
+the project asks:
+
+> **Which agents ran, which tools were called, how much data moved, and
+> how many tokens did the request consume?**
+
+That makes optimization an engineering problem rather than guesswork.
+
+------------------------------------------------------------------------
+
+## 📈 Optimization roadmap
+
+Potential next steps include:
+
+-   Further reduce supervisor LLM calls
+-   Improve deterministic intent classification
+-   Cache repeated task/memory context
+-   Parallelize independent task and memory retrieval
+-   Reduce MCP response payloads
+-   Add structured planning output
+-   Measure latency per agent
+-   Add prompt-version tracking
+-   Add token-cost dashboards
+-   Add automated regression tests for routing and token budgets
+
+------------------------------------------------------------------------
+
+## 🎯 Project goal
+
+FocusRoom is not just a task manager with an AI chatbot.
+
+It is an experiment in building a **personal productivity operating
+system** where:
+
+``` text
+Natural language
+      ↓
+Intent
+      ↓
+Agent orchestration
+      ↓
+Tools + memory
+      ↓
+Planning
+      ↓
+Actionable result
 ```
 
-## Usage monitoring
+The long-term goal is simple:
 
-Groq usage is recorded from each API response in the local `token_usage` table. The Streamlit Overview telemetry section shows:
+**Less time managing the system. More time doing the work.**
 
-- total requests
-- prompt tokens
-- completion tokens
-- total tokens
-- usage grouped by operation, such as `supervisor_decision` and `planning_request`
-- average tokens per execution
-- a `TOTAL` row for the complete usage summary
+------------------------------------------------------------------------
 
-MCP traffic is tracked separately in the `mcp_transport` table as request and response bytes. The MCP panel also shows per-tool call counts and distinguishes authoritative tool calls from transport rows. MCP bytes are not added to Groq token totals. When MCP data is included in a later Groq prompt, those tokens are counted automatically in Groq's `prompt_tokens` value.
+## 📄 Documentation
 
-Each execution is grouped by an `execution_id`. The trace records the ordered stages involved in a request, including LLM calls, supervisor and specialized agent invocations, MCP tools, results, and follow-up planning LLM calls. The dashboard also shows current-execution MCP transport and token summaries.
+  Document            Purpose
+  ------------------- ---------------------------------------------
+  `README.md`         Project overview and quick start
+  `lld.md`            Low-level design and implementation details
+  `architecture.md`   System architecture and workflow diagrams
 
-Telemetry is persisted in these SQLite tables:
+------------------------------------------------------------------------
 
-- `token_usage` - one row per Groq response with prompt, completion, and total tokens
-- `execution_events` - ordered LLM, agent, MCP, and result events grouped by execution ID
-- `mcp_transport` - HTTP request/response byte counts and status codes, linked to execution IDs
+## ⭐ Why FocusRoom?
 
-Direct MCP tool calls and natural-language `productivity_assistant` calls are both traced. The MCP server counts streaming response chunks as they arrive, so transport counters update even when a response remains open.
+Because productivity software should understand **what you are trying to
+accomplish**, not just store a list of tasks.
 
-## Project structure
-
-```text
-Productivity_Agent/
-|-- streamlit_app.py              # Streamlit user interface
-|-- requirements.txt              # Python dependencies
-|-- .env.example                  # Environment variable template
-|-- productivity.db               # Local SQLite database, generated locally
-|-- reminder_service.py           # Reminder service implementation
-|-- reminder_worker.py            # Continuous reminder worker
-|-- orchestrator/
-|   |-- agent.py                  # Core task, memory, plan, and report logic
-|   |-- database.py               # SQLite persistence layer
-|   |-- orchestrator.py           # Multi-agent supervisor
-|   |-- mcp_server.py             # MCP HTTP server and tools
-|   |-- telemetry.py              # Execution IDs and ordered trace events
-|   |-- memory_agent.py           # Memory agent adapter
-|   |-- planning_agent.py         # Planning agent adapter
-|   |-- task_agent.py             # Task agent adapter
-|-- test_*.py                     # Project tests
-```
-
-## Data and security notes
-
-- Tasks and memories are stored locally in SQLite.
-- `.env` contains secrets and must remain private.
-- For Gmail, use an app password where required instead of your primary account password.
-- The MCP API key is required when the server is exposed beyond localhost.
-- Back up `productivity.db` if the local task and memory history is important.
-
-## Troubleshooting
-
-### `pytest` is not recognized
-
-Run pytest through the virtual environment:
-
-```powershell
-.\.venv\Scripts\python -m pytest -q
-```
-
-### The app starts but the assistant is unavailable
-
-Check that `.env` exists and contains a valid `GROQ_API_KEY`, then restart Streamlit.
-
-### Streamlit reports `missing ScriptRunContext`
-
-This warning appears when importing a Streamlit module directly with `python -c`. Start the application with `streamlit run streamlit_app.py` for normal operation.
-
-### Compilation works but tests fail during collection
-
-A collection error means pytest could not finish importing the tests. Read the first reported exception and fix that dependency or constructor mismatch before evaluating the remaining tests.
+**FocusRoom turns productivity from a collection of tools into a
+coordinated system.**
