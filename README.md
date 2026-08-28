@@ -2,45 +2,6 @@
 
 A personal productivity workspace built with Python, Streamlit, Groq, SQLite, and MCP. It combines task management, daily planning, persistent memories, a multi-agent supervisor, and optional email reminders in one project.
 
-
-flowchart TD
-    U[User] --> UI[Streamlit UI]
-
-    UI --> O[Productivity Supervisor / Orchestrator]
-
-    O --> R{Deterministic Router}
-
-    R -->|Common request| A1[Task Agent]
-    R -->|Common request| A2[Memory Agent]
-    R -->|Common request| A3[Planning Agent]
-
-    R -->|Unknown request| LLM[Supervisor LLM]
-    LLM --> A1
-    LLM --> A2
-    LLM --> A3
-
-    A1 --> MCP[MCP Server]
-    A2 --> MCP
-    A3 --> MCP
-
-    MCP --> T[Task Tools]
-    MCP --> M[Memory Tools]
-    MCP --> P[Planning Tools]
-
-    T --> DB[(SQLite Database)]
-    M --> DB
-    P --> DB
-
-    DB --> A1
-    DB --> A2
-
-    A1 --> O
-    A2 --> O
-    A3 --> O
-
-    O --> UI
-    UI --> U
-
     
 ## Features
 
